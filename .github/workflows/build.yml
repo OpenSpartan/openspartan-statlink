@@ -1,0 +1,102 @@
+name: "Build"
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.gitignore'
+      - '**/*.gitattributes'
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.gitignore'
+      - '**/*.gitattributes'
+  workflow_dispatch:
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.gitignore'
+      - '**/*.gitattributes'
+      
+jobs:
+  build:
+    environment: Production
+    strategy:
+      matrix:
+        os: [ubuntu-latest,macos-latest,windows-latest]
+    if: (github.event_name == 'pull_request' || github.event_name == 'push') && contains(toJson(github.event.commits), '***NO_CI***') == false && contains(toJson(github.event.commits), '[ci skip]') == false && contains(toJson(github.event.commits), '[skip ci]') == false
+    name: Build 
+    runs-on: ${{ matrix.os }}
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      DOTNET_NOLOGO: true
+      DOTNET_GENERATE_ASPNET_CERTIFICATE: false
+      DOTNET_ADD_GLOBAL_TOOLS_TO_PATH: false
+      DOTNET_MULTILEVEL_LOOKUP: 0
+
+    steps:
+    - uses: actions/checkout@v2
+      
+    - name: Setup .NET Core SDK
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 6.0.x
+
+    - name: Add Package Source (Linux & Mac)
+      if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
+      working-directory: ./OpenSpartan.StatLink
+      run: dotnet nuget add source https://nuget.pkg.github.com/dend/index.json --store-password-in-clear-text --username dend --password ${{ secrets.PACKAGE_PAT }}
+
+    - name: Add Package Source (Windows)
+      if: matrix.os == 'windows-latest'
+      working-directory: ./OpenSpartan.StatLink
+      run: dotnet nuget add source https://nuget.pkg.github.com/dend/index.json --username dend --password ${{ secrets.PACKAGE_PAT }}
+
+    - name: Restore
+      working-directory: ./OpenSpartan.StatLink
+      run: dotnet restore
+
+    - name: Build
+      working-directory: ./OpenSpartan.StatLink
+      run: dotnet build --configuration Release --no-restore -o finalbuild-${{ matrix.os }}
+
+    - name: List current folders
+      working-directory: ./OpenSpartan.StatLink
+      run: ls
+
+    - name: List content of build folder
+      working-directory: ./OpenSpartan.StatLink
+      run: ls finalbuild-${{ matrix.os }}
+
+    - name: Test
+      working-directory: ./OpenSpartan.StatLink
+      run: dotnet test
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: ossl-${{ matrix.os }}.zip
+        path: OpenSpartan.StatLink/finalbuild-${{ matrix.os }}
+
+    - name: ZIP Release (Ubuntu)
+      if: matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/')
+      working-directory: ./OpenSpartan.StatLink
+      run: sudo apt-get install zip | zip -r ossl-${{ matrix.os }}.zip finalbuild-${{ matrix.os }}
+
+    - name: ZIP Release (macOS)
+      if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/')
+      working-directory: ./OpenSpartan.StatLink
+      run: zip -r ossl-${{ matrix.os }}.zip finalbuild-${{ matrix.os }}
+
+    - name: ZIP Release (Windows)
+      if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+      working-directory: ./OpenSpartan.StatLink
+      run: Compress-Archive -Path finalbuild-${{ matrix.os }} -DestinationPath ossl-${{ matrix.os }}.zip
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: OpenSpartan.StatLink/ossl-${{ matrix.os }}.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
